@@ -1,0 +1,303 @@
+// routes/timelines.js
+//
+// Timelines y endpoints de cuenta que Elk necesita para armar el feed:
+//   - GET /api/v1/timelines/home    -> posts de quien sigo (local + remoto)
+//   - GET /api/v1/timelines/public  -> posts públicos de la instancia
+//   - GET /api/v1/accounts/verify_credentials -> "quién soy" (justo tras login)
+//   - GET /api/v1/accounts/:id
+//   - GET /api/v1/accounts/:id/statuses
+//   - GET /api/v1/instance -> metadata básica que Elk pide para saber
+//     contra qué tipo de servidor está hablando
+
+const express = require('express');
+const pool = require('../db/pool');
+const { requireAuth, attachUserIfPresent } = require('../lib/authMiddleware');
+const {
+  serializeLocalAccount,
+  serializeRemoteAccount,
+  serializeLocalStatus,
+  serializeRemoteStatus,
+} = require('../lib/serializers');
+
+const router = express.Router();
+
+function getInstanceDomain() {
+  if (!process.env.INSTANCE_DOMAIN) {
+    throw new Error('Falta la variable de entorno INSTANCE_DOMAIN.');
+  }
+  return process.env.INSTANCE_DOMAIN;
+}
+
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 40;
+
+function parseLimit(query) {
+  const n = parseInt(query.limit, 10);
+  if (Number.isNaN(n) || n <= 0) return DEFAULT_LIMIT;
+  return Math.min(n, MAX_LIMIT);
+}
+
+/**
+ * Trae extras (favourited/reblogged/counts) para una LISTA de statuses
+ * de una sola vez, para no hacer N+1 queries en el timeline.
+ */
+async function getExtrasForMany(ids, isRemoteFlags, authUserId) {
+  // ids e isRemoteFlags están alineados por índice. Separamos en dos grupos.
+  const localIds = ids.filter((id, i) => !isRemoteFlags[i]);
+  const remoteIds = ids.filter((id, i) => isRemoteFlags[i]);
+
+  const extrasMap = {};
+
+  async function fillFor(idList, col) {
+    if (idList.length === 0) return;
+    const favResult = await pool.query(
+      `SELECT ${col} AS sid, COUNT(*)::int AS c FROM favourites WHERE ${col} = ANY($1) GROUP BY ${col}`,
+      [idList]
+    );
+    const reblogResult = await pool.query(
+      `SELECT ${col} AS sid, COUNT(*)::int AS c FROM reblogs WHERE ${col} = ANY($1) GROUP BY ${col}`,
+      [idList]
+    );
+    const myFavResult = authUserId
+      ? await pool.query(`SELECT ${col} AS sid FROM favourites WHERE ${col} = ANY($1) AND user_id = $2`, [idList, authUserId])
+      : { rows: [] };
+    const myReblogResult = authUserId
+      ? await pool.query(`SELECT ${col} AS sid FROM reblogs WHERE ${col} = ANY($1) AND user_id = $2`, [idList, authUserId])
+      : { rows: [] };
+
+    for (const id of idList) {
+      extrasMap[id] = {
+        favourites_count: favResult.rows.find((r) => r.sid === id)?.c || 0,
+        reblogs_count: reblogResult.rows.find((r) => r.sid === id)?.c || 0,
+        favourited: myFavResult.rows.some((r) => r.sid === id),
+        reblogged: myReblogResult.rows.some((r) => r.sid === id),
+      };
+    }
+  }
+
+  await fillFor(localIds, 'status_id');
+  await fillFor(remoteIds, 'remote_status_id');
+
+  return extrasMap;
+}
+
+/**
+ * GET /api/v1/timelines/public
+ * Mezcla statuses locales públicos + remote_statuses públicos, ordenados
+ * por fecha. Al mezclar dos tablas con paginación por cursor exacta nos
+ * complicaríamos mucho para una V1, así que usamos paginación simple por
+ * fecha (max_id no soportado todavía — Elk lo tolera, solo scrollea menos).
+ */
+router.get('/api/v1/timelines/public', attachUserIfPresent, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  const limit = parseLimit(req.query);
+
+  try {
+    const localResult = await pool.query(
+      `SELECT s.*, u.username, u.display_name, u.bio, u.created_at AS user_created_at,
+              u.followers_count, u.following_count, u.statuses_count, u.id AS user_id
+       FROM statuses s JOIN users u ON u.id = s.author_id
+       WHERE s.visibility = 'public'
+       ORDER BY s.created_at DESC LIMIT $1`,
+      [limit]
+    );
+    const remoteResult = await pool.query(
+      `SELECT rs.*, ra.username, ra.domain, ra.display_name, ra.actor_uri, ra.fetched_at, ra.id AS actor_id
+       FROM remote_statuses rs JOIN remote_actors ra ON ra.id = rs.author_actor_id
+       WHERE rs.visibility = 'public'
+       ORDER BY rs.received_at DESC LIMIT $1`,
+      [limit]
+    );
+
+    const localIds = localResult.rows.map((r) => r.id);
+    const remoteIds = remoteResult.rows.map((r) => r.id);
+    const allIds = [...localIds, ...remoteIds];
+    const isRemoteFlags = [...localIds.map(() => false), ...remoteIds.map(() => true)];
+    const extrasMap = await getExtrasForMany(allIds, isRemoteFlags, req.authUser?.id);
+
+    const localSerialized = localResult.rows.map((row) =>
+      serializeLocalStatus(row, { ...row, id: row.user_id }, instanceDomain, extrasMap[row.id])
+    );
+    const remoteSerialized = remoteResult.rows.map((row) =>
+      serializeRemoteStatus(row, { ...row, id: row.actor_id }, extrasMap[row.id])
+    );
+
+    const merged = [...localSerialized, ...remoteSerialized].sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
+
+    return res.json(merged.slice(0, limit));
+  } catch (err) {
+    console.error('Error en GET /api/v1/timelines/public:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
+ * GET /api/v1/timelines/home
+ * Posts de las cuentas (locales o remotas) que el usuario autenticado sigue,
+ * más sus propios posts (así lo hace Mastodon).
+ */
+router.get('/api/v1/timelines/home', requireAuth, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  const limit = parseLimit(req.query);
+
+  try {
+    // IDs de usuarios locales y actores remotos que sigo.
+    const followingResult = await pool.query(
+      `SELECT followee_user_id, followee_actor_id FROM follows
+       WHERE follower_user_id = $1 AND status = 'accepted'`,
+      [req.authUser.id]
+    );
+    const followedUserIds = followingResult.rows.map((r) => r.followee_user_id).filter(Boolean);
+    followedUserIds.push(req.authUser.id); // incluir mis propios posts
+    const followedActorIds = followingResult.rows.map((r) => r.followee_actor_id).filter(Boolean);
+
+    const localResult = followedUserIds.length
+      ? await pool.query(
+          `SELECT s.*, u.username, u.display_name, u.bio, u.created_at AS user_created_at,
+                  u.followers_count, u.following_count, u.statuses_count, u.id AS user_id
+           FROM statuses s JOIN users u ON u.id = s.author_id
+           WHERE s.author_id = ANY($1)
+           ORDER BY s.created_at DESC LIMIT $2`,
+          [followedUserIds, limit]
+        )
+      : { rows: [] };
+
+    const remoteResult = followedActorIds.length
+      ? await pool.query(
+          `SELECT rs.*, ra.username, ra.domain, ra.display_name, ra.actor_uri, ra.fetched_at, ra.id AS actor_id
+           FROM remote_statuses rs JOIN remote_actors ra ON ra.id = rs.author_actor_id
+           WHERE rs.author_actor_id = ANY($1)
+           ORDER BY rs.received_at DESC LIMIT $2`,
+          [followedActorIds, limit]
+        )
+      : { rows: [] };
+
+    const localIds = localResult.rows.map((r) => r.id);
+    const remoteIds = remoteResult.rows.map((r) => r.id);
+    const allIds = [...localIds, ...remoteIds];
+    const isRemoteFlags = [...localIds.map(() => false), ...remoteIds.map(() => true)];
+    const extrasMap = await getExtrasForMany(allIds, isRemoteFlags, req.authUser.id);
+
+    const localSerialized = localResult.rows.map((row) =>
+      serializeLocalStatus(row, { ...row, id: row.user_id }, instanceDomain, extrasMap[row.id])
+    );
+    const remoteSerialized = remoteResult.rows.map((row) =>
+      serializeRemoteStatus(row, { ...row, id: row.actor_id }, extrasMap[row.id])
+    );
+
+    const merged = [...localSerialized, ...remoteSerialized].sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
+
+    return res.json(merged.slice(0, limit));
+  } catch (err) {
+    console.error('Error en GET /api/v1/timelines/home:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
+ * GET /api/v1/accounts/verify_credentials
+ * Lo primero que Elk pide justo después de obtener el access_token.
+ */
+router.get('/api/v1/accounts/verify_credentials', requireAuth, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  return res.json(serializeLocalAccount(req.authUser, instanceDomain));
+});
+
+/**
+ * GET /api/v1/accounts/:id
+ * Puede ser un usuario local o un actor remoto cacheado.
+ */
+router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  try {
+    const localResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    if (localResult.rows.length > 0) {
+      return res.json(serializeLocalAccount(localResult.rows[0], instanceDomain));
+    }
+    const remoteResult = await pool.query('SELECT * FROM remote_actors WHERE id = $1', [req.params.id]);
+    if (remoteResult.rows.length > 0) {
+      return res.json(serializeRemoteAccount(remoteResult.rows[0]));
+    }
+    return res.status(404).json({ error: 'Cuenta no encontrada.' });
+  } catch (err) {
+    console.error('Error en GET /api/v1/accounts/:id:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
+ * GET /api/v1/accounts/:id/statuses
+ */
+router.get('/api/v1/accounts/:id/statuses', attachUserIfPresent, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  const limit = parseLimit(req.query);
+
+  try {
+    const localUser = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    if (localUser.rows.length > 0) {
+      const statusesResult = await pool.query(
+        'SELECT * FROM statuses WHERE author_id = $1 ORDER BY created_at DESC LIMIT $2',
+        [req.params.id, limit]
+      );
+      const ids = statusesResult.rows.map((r) => r.id);
+      const extrasMap = await getExtrasForMany(ids, ids.map(() => false), req.authUser?.id);
+      const serialized = statusesResult.rows.map((row) =>
+        serializeLocalStatus(row, localUser.rows[0], instanceDomain, extrasMap[row.id])
+      );
+      return res.json(serialized);
+    }
+
+    const remoteActor = await pool.query('SELECT * FROM remote_actors WHERE id = $1', [req.params.id]);
+    if (remoteActor.rows.length > 0) {
+      const statusesResult = await pool.query(
+        'SELECT * FROM remote_statuses WHERE author_actor_id = $1 ORDER BY received_at DESC LIMIT $2',
+        [req.params.id, limit]
+      );
+      const ids = statusesResult.rows.map((r) => r.id);
+      const extrasMap = await getExtrasForMany(ids, ids.map(() => true), req.authUser?.id);
+      const serialized = statusesResult.rows.map((row) =>
+        serializeRemoteStatus(row, remoteActor.rows[0], extrasMap[row.id])
+      );
+      return res.json(serialized);
+    }
+
+    return res.status(404).json({ error: 'Cuenta no encontrada.' });
+  } catch (err) {
+    console.error('Error en GET /api/v1/accounts/:id/statuses:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
+ * GET /api/v1/instance
+ * Elk (y cualquier cliente Mastodon) pide esto para saber el nombre,
+ * versión y reglas básicas de la instancia antes/durante el login.
+ */
+router.get('/api/v1/instance', async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  return res.json({
+    uri: instanceDomain,
+    title: 'Quilltoot',
+    short_description: 'Una instancia federada de solo texto.',
+    description: 'Quilltoot es una instancia ActivityPub minimalista: publicaciones de solo texto, federada con el resto del fediverso.',
+    email: '',
+    version: '4.2.0', // versión de Mastodon que decimos emular, para compatibilidad de features en Elk
+    urls: {},
+    stats: { user_count: 0, status_count: 0, domain_count: 0 },
+    thumbnail: null,
+    languages: ['es', 'en'],
+    registrations: String(process.env.OPEN_REGISTRATION).toLowerCase() === 'true',
+    approval_required: false,
+    invites_enabled: false,
+    configuration: {
+      statuses: { max_characters: 500, max_media_attachments: 0 },
+      media_attachments: { supported_mime_types: [] },
+    },
+  });
+});
+
+module.exports = router;
