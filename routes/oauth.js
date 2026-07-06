@@ -19,7 +19,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const pool = require('../db/pool');
-const { verifyCredentials } = require('./auth');
+const { verifyCredentialsDetailed } = require('./auth');
 
 const router = express.Router();
 
@@ -170,11 +170,24 @@ router.post('/oauth/authorize', express.urlencoded({ extended: true }), async (r
     return res.status(400).send('redirect_uri no coincide con ninguno de los registrados para esta app.');
   }
 
-  const user = await verifyCredentials(identifier, password);
-  if (!user) {
-    const qs = new URLSearchParams({ client_id, redirect_uri, response_type: 'code', scope, state: state || '', error: 'Usuario o contraseña incorrectos.' });
+  const result = await verifyCredentialsDetailed(identifier, password);
+  if (!result.ok) {
+    const errorMessages = {
+      invalid_credentials: 'Usuario o contraseña incorrectos.',
+      pending_approval: 'Tu cuenta todavía está pendiente de aprobación por un administrador.',
+      rejected: 'Tu solicitud de registro fue rechazada en esta instancia.',
+    };
+    const qs = new URLSearchParams({
+      client_id,
+      redirect_uri,
+      response_type: 'code',
+      scope,
+      state: state || '',
+      error: errorMessages[result.reason] || errorMessages.invalid_credentials,
+    });
     return res.redirect(`/oauth/authorize?${qs.toString()}`);
   }
+  const user = result.user;
 
   const code = randomToken(24);
   await pool.query(

@@ -12,6 +12,7 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, attachUserIfPresent } = require('../lib/authMiddleware');
+const { isApprovalRequired, isOpenRegistration } = require('../lib/registrationConfig');
 const {
   serializeLocalAccount,
   serializeRemoteAccount,
@@ -230,6 +231,50 @@ router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
 });
 
 /**
+ * GET /api/v1/accounts/lookup?acct=username o username@dominio
+ *
+ * Endpoint estándar de Mastodon: resuelve una cuenta por su @handle en
+ * vez de por id. Lo usa Elk al buscar "@usuario", y también nuestro
+ * propio perfil público (/@usuario) para traer los datos a mostrar.
+ * Si el dominio en el acct es el nuestro (o no viene dominio), busca en
+ * `users`; si es de otra instancia, busca en el cache de `remote_actors`
+ * (y devuelve 404 si todavía no la conocemos — no resolvemos vía
+ * WebFinger en vivo aquí, eso es trabajo del módulo de federación).
+ */
+router.get('/api/v1/accounts/lookup', attachUserIfPresent, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  const acct = (req.query.acct || '').replace(/^@/, '');
+
+  if (!acct) {
+    return res.status(400).json({ error: 'Falta el parámetro acct.' });
+  }
+
+  const [username, domain] = acct.split('@');
+
+  try {
+    if (!domain || domain === instanceDomain) {
+      const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Cuenta no encontrada.' });
+      }
+      return res.json(serializeLocalAccount(result.rows[0], instanceDomain));
+    }
+
+    const result = await pool.query(
+      'SELECT * FROM remote_actors WHERE username = $1 AND domain = $2',
+      [username, domain]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Cuenta remota no encontrada todavía en esta instancia.' });
+    }
+    return res.json(serializeRemoteAccount(result.rows[0]));
+  } catch (err) {
+    console.error('Error en GET /api/v1/accounts/lookup:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
  * GET /api/v1/accounts/:id/statuses
  */
 router.get('/api/v1/accounts/:id/statuses', attachUserIfPresent, async (req, res) => {
@@ -290,8 +335,8 @@ router.get('/api/v1/instance', async (req, res) => {
     stats: { user_count: 0, status_count: 0, domain_count: 0 },
     thumbnail: null,
     languages: ['es', 'en'],
-    registrations: String(process.env.OPEN_REGISTRATION).toLowerCase() === 'true',
-    approval_required: false,
+    registrations: isOpenRegistration(),
+    approval_required: isApprovalRequired(),
     invites_enabled: false,
     configuration: {
       statuses: { max_characters: 500, max_media_attachments: 0 },

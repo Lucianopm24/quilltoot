@@ -47,9 +47,18 @@ CREATE TABLE users (
     -- Un admin puede otorgar/quitar admin a otros después.
     is_admin             BOOLEAN NOT NULL DEFAULT false,
 
+    -- Aprobación de admin (APPROVAL_REQUIRED, activado por defecto):
+    -- una cuenta 'pending' no puede completar el login OAuth hasta que
+    -- un admin la apruebe. La primera cuenta (admin) siempre nace 'approved'.
+    approval_status      TEXT NOT NULL DEFAULT 'approved'
+                            CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+    join_reason          TEXT,  -- por qué quiere unirse; obligatorio si APPROVAL_REQUIRED=true
+
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_users_approval_status ON users(approval_status) WHERE approval_status = 'pending';
 
 -- ------------------------------------------------------------
 -- REMOTE_ACTORS (cache de actores de otras instancias)
