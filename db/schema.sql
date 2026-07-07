@@ -312,3 +312,34 @@ CREATE TABLE inbox_log (
     error               TEXT,
     received_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================
+-- MÓDULO 5 (Inbox) — un actor REMOTO también puede favoritear o
+-- rebloguear contenido nuestro (Like/Announce que llegan federados).
+-- Hasta ahora favourites/reblogs solo contemplaban a un usuario LOCAL
+-- como quien da el like/boost; agregamos el lado remoto sin romper
+-- nada de lo que statuses.js ya usa para los usuarios locales.
+-- ============================================================
+ALTER TABLE favourites
+    ALTER COLUMN user_id DROP NOT NULL,
+    ADD COLUMN actor_id UUID REFERENCES remote_actors(id) ON DELETE CASCADE,
+    ADD CONSTRAINT favourites_favouriter_check CHECK (
+        (user_id IS NOT NULL)::int + (actor_id IS NOT NULL)::int = 1
+    );
+
+CREATE UNIQUE INDEX idx_favourites_unique_remote_actor_on_local
+    ON favourites(actor_id, status_id) WHERE actor_id IS NOT NULL AND status_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_favourites_unique_remote_actor_on_remote
+    ON favourites(actor_id, remote_status_id) WHERE actor_id IS NOT NULL AND remote_status_id IS NOT NULL;
+
+ALTER TABLE reblogs
+    ALTER COLUMN user_id DROP NOT NULL,
+    ADD COLUMN actor_id UUID REFERENCES remote_actors(id) ON DELETE CASCADE,
+    ADD CONSTRAINT reblogs_rebloguer_check CHECK (
+        (user_id IS NOT NULL)::int + (actor_id IS NOT NULL)::int = 1
+    );
+
+CREATE UNIQUE INDEX idx_reblogs_unique_remote_actor_on_local
+    ON reblogs(actor_id, status_id) WHERE actor_id IS NOT NULL AND status_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_reblogs_unique_remote_actor_on_remote
+    ON reblogs(actor_id, remote_status_id) WHERE actor_id IS NOT NULL AND remote_status_id IS NOT NULL;
