@@ -20,6 +20,7 @@ const pool = require('../db/pool');
 const { generateKeyPair } = require('../lib/keys');
 const { attachUserIfPresent, requireAuth } = require('../lib/authMiddleware');
 const { isApprovalRequired, isOpenRegistration } = require('../lib/registrationConfig');
+const { getInstanceSettings, updateInstanceSettings, EDITABLE_FIELDS } = require('../lib/instanceSettings');
 
 const router = express.Router();
 
@@ -167,6 +168,51 @@ async function resolveApproval(req, res, newStatus) {
 
 router.post('/admin/:username/approve', requireAuth, (req, res) => resolveApproval(req, res, 'approved'));
 router.post('/admin/:username/reject', requireAuth, (req, res) => resolveApproval(req, res, 'rejected'));
+
+/**
+ * GET /auth/admin/instance
+ * PATCH /auth/admin/instance
+ * body (PATCH): { title?, short_description?, description?, contact_email? }
+ *
+ * Permite al admin configurar lo que expone /api/v1/instance (título,
+ * descripciones, email de contacto) sin tener que tocar código ni
+ * redeployar. Solo se aceptan los campos en EDITABLE_FIELDS; cualquier
+ * otra cosa en el body se ignora silenciosamente.
+ */
+router.get('/admin/instance', requireAuth, async (req, res) => {
+  if (!req.authUser.is_admin) {
+    return res.status(403).json({ error: 'Solo un admin puede ver la configuración de la instancia.' });
+  }
+  try {
+    const settings = await getInstanceSettings();
+    return res.json({ settings });
+  } catch (err) {
+    console.error('Error en GET /auth/admin/instance:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+router.patch('/admin/instance', requireAuth, async (req, res) => {
+  if (!req.authUser.is_admin) {
+    return res.status(403).json({ error: 'Solo un admin puede editar la configuración de la instancia.' });
+  }
+  const body = req.body || {};
+  const receivedKeys = Object.keys(body);
+  const unknownKeys = receivedKeys.filter((k) => !EDITABLE_FIELDS.includes(k));
+
+  try {
+    const settings = await updateInstanceSettings(body);
+    return res.json({
+      settings,
+      ...(unknownKeys.length > 0 && {
+        warning: `Estos campos no existen y se ignoraron: ${unknownKeys.join(', ')}. Campos válidos: ${EDITABLE_FIELDS.join(', ')}.`,
+      }),
+    });
+  } catch (err) {
+    console.error('Error en PATCH /auth/admin/instance:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
 
 /**
  * POST /auth/admins/:username

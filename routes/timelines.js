@@ -13,6 +13,7 @@ const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, attachUserIfPresent } = require('../lib/authMiddleware');
 const { isApprovalRequired, isOpenRegistration } = require('../lib/registrationConfig');
+const { getInstanceSettings, getInstanceStats } = require('../lib/instanceSettings');
 const {
   serializeLocalAccount,
   serializeRemoteAccount,
@@ -324,25 +325,32 @@ router.get('/api/v1/accounts/:id/statuses', attachUserIfPresent, async (req, res
  */
 router.get('/api/v1/instance', async (req, res) => {
   const instanceDomain = getInstanceDomain();
-  return res.json({
-    uri: instanceDomain,
-    title: 'Quilltoot',
-    short_description: 'Una instancia federada de solo texto.',
-    description: 'Quilltoot es una instancia ActivityPub minimalista: publicaciones de solo texto, federada con el resto del fediverso.',
-    email: '',
-    version: '4.2.0', // versión de Mastodon que decimos emular, para compatibilidad de features en Elk
-    urls: {},
-    stats: { user_count: 0, status_count: 0, domain_count: 0 },
-    thumbnail: null,
-    languages: ['es', 'en'],
-    registrations: isOpenRegistration(),
-    approval_required: isApprovalRequired(),
-    invites_enabled: false,
-    configuration: {
-      statuses: { max_characters: 500, max_media_attachments: 0 },
-      media_attachments: { supported_mime_types: [] },
-    },
-  });
+  try {
+    const [settings, stats] = await Promise.all([getInstanceSettings(), getInstanceStats()]);
+
+    return res.json({
+      uri: instanceDomain,
+      title: settings.title,
+      short_description: settings.short_description,
+      description: settings.description,
+      email: settings.contact_email,
+      version: '4.2.0', // versión de Mastodon que decimos emular, para compatibilidad de features en Elk
+      urls: {},
+      stats,
+      thumbnail: null,
+      languages: ['es', 'en'],
+      registrations: isOpenRegistration(),
+      approval_required: isApprovalRequired(),
+      invites_enabled: false,
+      configuration: {
+        statuses: { max_characters: 500, max_media_attachments: 0 },
+        media_attachments: { supported_mime_types: [] },
+      },
+    });
+  } catch (err) {
+    console.error('Error en GET /api/v1/instance:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
 });
 
 module.exports = router;

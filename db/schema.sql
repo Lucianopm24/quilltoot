@@ -277,6 +277,28 @@ CREATE TABLE oauth_auth_codes (
 );
 
 -- ------------------------------------------------------------
+-- INSTANCE_SETTINGS (configuración de la instancia, editable por un
+-- admin sin tocar código ni redeployar — lo que expone /api/v1/instance)
+-- ------------------------------------------------------------
+-- Tabla "singleton": siempre existe exactamente una fila, con id=1
+-- forzado por el CHECK. Así evitamos ambigüedad de "cuál fila leo".
+CREATE TABLE instance_settings (
+    id                  SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+
+    title               TEXT NOT NULL DEFAULT 'Quilltoot',
+    short_description   TEXT NOT NULL DEFAULT 'Una instancia federada de solo texto.',
+    description         TEXT NOT NULL DEFAULT 'Quilltoot es una instancia ActivityPub minimalista: publicaciones de solo texto, federada con el resto del fediverso.',
+    contact_email       TEXT NOT NULL DEFAULT '',
+
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Sembramos la fila única con los valores por defecto, para que la
+-- instancia arranque funcionando aunque el admin todavía no haya
+-- configurado nada desde el endpoint correspondiente.
+INSERT INTO instance_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- ------------------------------------------------------------
 -- INBOX_LOG (log simple de actividades recibidas, para debug y para
 -- deduplicar actividades que el mismo servidor remoto reenvía)
 -- ------------------------------------------------------------
