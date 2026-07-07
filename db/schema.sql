@@ -343,3 +343,171 @@ CREATE UNIQUE INDEX idx_reblogs_unique_remote_actor_on_local
     ON reblogs(actor_id, status_id) WHERE actor_id IS NOT NULL AND status_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_reblogs_unique_remote_actor_on_remote
     ON reblogs(actor_id, remote_status_id) WHERE actor_id IS NOT NULL AND remote_status_id IS NOT NULL;
+
+-- ============================================================
+-- MÓDULO 7 (Moderación) — roles de moderador, suspensión/silencio
+-- de cuentas (locales y remotas), domain blocks, bloqueos/mutes a
+-- nivel usuario y reportes. Todo pensado para manejarse desde un
+-- panel de frontend, no solo por SQL directo.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- USERS — rol de moderador + estado de suspensión/silencio.
+-- is_admin ya existía (módulo de auth); is_moderator es un escalón
+-- intermedio: puede moderar pero no tocar la config de la instancia
+-- ni otorgar roles. Un admin siempre cuenta como moderador también
+-- (lo resuelve el middleware, no hace falta duplicarlo acá).
+-- ------------------------------------------------------------
+ALTER TABLE users
+    ADD COLUMN is_moderator     BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN suspended_at     TIMESTAMPTZ,
+    ADD COLUMN suspended_reason TEXT,
+    ADD COLUMN suspended_by     UUID REFERENCES users(id) ON DELETE SET NULL,
+    ADD COLUMN silenced_at      TIMESTAMPTZ,
+    ADD COLUMN silenced_reason  TEXT,
+    ADD COLUMN silenced_by      UUID REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE INDEX idx_users_suspended ON users(id) WHERE suspended_at IS NOT NULL;
+
+-- ------------------------------------------------------------
+-- REMOTE_ACTORS — mismo concepto de suspensión/silencio, pero del
+-- lado de una cuenta de OTRA instancia (independiente de bloquear
+-- el dominio entero: acá se apunta a un actor puntual).
+-- ------------------------------------------------------------
+ALTER TABLE remote_actors
+    ADD COLUMN suspended_at     TIMESTAMPTZ,
+    ADD COLUMN suspended_reason TEXT,
+    ADD COLUMN suspended_by     UUID REFERENCES users(id) ON DELETE SET NULL,
+    ADD COLUMN silenced_at      TIMESTAMPTZ,
+    ADD COLUMN silenced_reason  TEXT,
+    ADD COLUMN silenced_by      UUID REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE INDEX idx_remote_actors_suspended ON remote_actors(id) WHERE suspended_at IS NOT NULL;
+
+-- ------------------------------------------------------------
+-- DOMAIN_BLOCKS — defederar una instancia entera.
+--   'suspend' -> se rechaza todo lo que llegue de ese dominio al
+--                Inbox (ni se procesa ni se guarda) y no se le
+--                entrega nada tampoco (el Outbox lo filtra).
+--   'silence' -> se procesa y se guarda como siempre, pero su
+--                contenido no aparece en el timeline público ni
+--                en búsquedas; solo lo ven quienes ya siguen a ese
+--                actor puntual.
+-- ------------------------------------------------------------
+CREATE TABLE domain_blocks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain          TEXT NOT NULL UNIQUE,
+    severity        TEXT NOT NULL CHECK (severity IN ('silence', 'suspend')),
+    reason          TEXT,
+    created_by      UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_domain_blocks_domain ON domain_blocks(domain);
+
+-- ------------------------------------------------------------
+-- USER_BLOCKS — bloqueo a nivel de usuario (no de instancia).
+-- A diferencia de silenciar/mutear, bloquear es mutuo en efecto:
+-- corta el follow en ambos sentidos y no deja que el bloqueado
+-- vuelva a seguir. El bloqueado NO se entera de que fue bloqueado
+-- (igual que Mastodon).
+-- ------------------------------------------------------------
+CREATE TABLE user_blocks (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    blocker_user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+    blocked_user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+    blocked_actor_id    UUID REFERENCES remote_actors(id) ON DELETE CASCADE,
+
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CHECK (
+        (blocked_user_id IS NOT NULL)::int + (blocked_actor_id IS NOT NULL)::int = 1
+    )
+);
+
+CREATE UNIQUE INDEX idx_user_blocks_unique_local
+    ON user_blocks(blocker_user_id, blocked_user_id) WHERE blocked_user_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_user_blocks_unique_remote
+    ON user_blocks(blocker_user_id, blocked_actor_id) WHERE blocked_actor_id IS NOT NULL;
+
+-- ------------------------------------------------------------
+-- USER_MUTES — silenciar/mutear a nivel de usuario: dejo de ver a
+-- alguien (sus posts no aparecen en mi timeline) SIN dejar de
+-- seguirlo y sin que se entere. notifications=true además oculta
+-- sus favs/boosts/menciones de mis notificaciones.
+-- ------------------------------------------------------------
+CREATE TABLE user_mutes (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    muter_user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+    muted_user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+    muted_actor_id      UUID REFERENCES remote_actors(id) ON DELETE CASCADE,
+
+    notifications       BOOLEAN NOT NULL DEFAULT true,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CHECK (
+        (muted_user_id IS NOT NULL)::int + (muted_actor_id IS NOT NULL)::int = 1
+    )
+);
+
+CREATE UNIQUE INDEX idx_user_mutes_unique_local
+    ON user_mutes(muter_user_id, muted_user_id) WHERE muted_user_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_user_mutes_unique_remote
+    ON user_mutes(muter_user_id, muted_actor_id) WHERE muted_actor_id IS NOT NULL;
+
+-- ------------------------------------------------------------
+-- REPORTS — un usuario reporta a otra cuenta (local o remota),
+-- opcionalmente citando statuses puntuales. Los moderadores los
+-- resuelven desde el panel (dismiss o resolve, con nota interna).
+-- ------------------------------------------------------------
+CREATE TABLE reports (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    reporter_user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+    target_user_id      UUID REFERENCES users(id) ON DELETE CASCADE,
+    target_actor_id     UUID REFERENCES remote_actors(id) ON DELETE CASCADE,
+
+    -- Statuses citados como evidencia (mezcla ids de `statuses` y de
+    -- `remote_statuses` en un solo arreglo; no hay FK posible sobre un
+    -- UUID que puede pertenecer a cualquiera de las dos tablas, por
+    -- eso queda como referencia suelta en vez de una FK real).
+    status_ids          UUID[] NOT NULL DEFAULT '{}',
+
+    category            TEXT NOT NULL DEFAULT 'other'
+                            CHECK (category IN ('spam', 'harassment', 'violation', 'other')),
+    comment              TEXT,
+
+    status               TEXT NOT NULL DEFAULT 'open'
+                            CHECK (status IN ('open', 'resolved', 'dismissed')),
+    handled_by           UUID REFERENCES users(id) ON DELETE SET NULL,
+    handled_at           TIMESTAMPTZ,
+    resolution_note      TEXT,
+
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CHECK (
+        (target_user_id IS NOT NULL)::int + (target_actor_id IS NOT NULL)::int = 1
+    )
+);
+
+CREATE INDEX idx_reports_status ON reports(status, created_at DESC);
+
+-- ------------------------------------------------------------
+-- MODERATION_LOG — auditoría de toda acción de moderador/admin.
+-- No reemplaza a `reports` (que es la denuncia en sí); esto es el
+-- historial de qué moderador hizo qué acción y cuándo, para poder
+-- mostrar un panel de "actividad de moderación" en el frontend.
+-- ------------------------------------------------------------
+CREATE TABLE moderation_log (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    moderator_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+    action          TEXT NOT NULL,   -- 'suspend_user', 'silence_actor', 'domain_block', etc.
+    target_type     TEXT NOT NULL CHECK (target_type IN ('user', 'remote_actor', 'domain', 'report')),
+    target_id       TEXT NOT NULL,   -- UUID o dominio, según target_type (no siempre es FK válida)
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_moderation_log_created ON moderation_log(created_at DESC);

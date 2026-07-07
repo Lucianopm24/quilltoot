@@ -25,6 +25,7 @@ const pool = require('../db/pool');
 const { verifySignature } = require('../lib/httpSignature');
 const { resolveRemoteActor } = require('../lib/remoteActors');
 const { dispatchActivity } = require('../lib/inboxHandlers');
+const { shouldRejectInbound } = require('../lib/moderation');
 
 const router = express.Router();
 
@@ -104,6 +105,16 @@ async function handleInboxRequest(req, res) {
   if (!verification.valid) {
     console.warn(`Firma inválida en Inbox (${activity.type} de ${getActorUri(activity)}): ${verification.reason}`);
     return res.status(401).json({ error: 'Firma HTTP inválida.' });
+  }
+
+  // Moderación: un actor o dominio en estado 'suspend' se rechaza acá
+  // mismo, ANTES de tocar inbox_log — no queremos ni rastro de sus
+  // actividades. No le devolvemos ningún detalle (202 igual), para no
+  // confirmarle que lo bloqueamos; solo queda el warning en nuestro log.
+  const moderationCheck = await shouldRejectInbound(verification.remoteActor);
+  if (moderationCheck.reject) {
+    console.warn(`Actividad rechazada por moderación (${activity.type} de ${getActorUri(activity)}): ${moderationCheck.reason}`);
+    return res.status(202).json({ status: 'aceptada' });
   }
 
   // Insertamos el log ANTES de procesar (no después) para que dos

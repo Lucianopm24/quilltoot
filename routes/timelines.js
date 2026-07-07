@@ -20,6 +20,7 @@ const {
   serializeLocalStatus,
   serializeRemoteStatus,
 } = require('../lib/serializers');
+const { localExclusionClause, remoteExclusionClause, viewerExclusionClause } = require('../lib/moderation');
 
 const router = express.Router();
 
@@ -95,18 +96,21 @@ router.get('/api/v1/timelines/public', attachUserIfPresent, async (req, res) => 
   const limit = parseLimit(req.query);
 
   try {
+    // Timeline pública: excluye cuentas suspendidas Y silenciadas (una
+    // cuenta silenciada sigue siendo visible para quien ya la sigue,
+    // pero no debe aparecer en el timeline público/de descubrimiento).
     const localResult = await pool.query(
       `SELECT s.*, u.username, u.display_name, u.bio, u.created_at AS user_created_at,
               u.followers_count, u.following_count, u.statuses_count, u.id AS user_id
        FROM statuses s JOIN users u ON u.id = s.author_id
-       WHERE s.visibility = 'public'
+       WHERE s.visibility = 'public' AND ${localExclusionClause({ includeSilenced: true })}
        ORDER BY s.created_at DESC LIMIT $1`,
       [limit]
     );
     const remoteResult = await pool.query(
       `SELECT rs.*, ra.username, ra.domain, ra.display_name, ra.actor_uri, ra.fetched_at, ra.id AS actor_id
        FROM remote_statuses rs JOIN remote_actors ra ON ra.id = rs.author_actor_id
-       WHERE rs.visibility = 'public'
+       WHERE rs.visibility = 'public' AND ${remoteExclusionClause({ includeSilenced: true })}
        ORDER BY rs.received_at DESC LIMIT $1`,
       [limit]
     );
@@ -155,14 +159,18 @@ router.get('/api/v1/timelines/home', requireAuth, async (req, res) => {
     followedUserIds.push(req.authUser.id); // incluir mis propios posts
     const followedActorIds = followingResult.rows.map((r) => r.followee_actor_id).filter(Boolean);
 
+    // Home SÍ muestra cuentas silenciadas (elegiste seguirlas a
+    // propósito), pero no suspendidas, ni tampoco a quien vos mismo
+    // bloqueaste o muteaste (viewerExclusionClause usa $3 = tu id).
     const localResult = followedUserIds.length
       ? await pool.query(
           `SELECT s.*, u.username, u.display_name, u.bio, u.created_at AS user_created_at,
                   u.followers_count, u.following_count, u.statuses_count, u.id AS user_id
            FROM statuses s JOIN users u ON u.id = s.author_id
-           WHERE s.author_id = ANY($1)
+           WHERE s.author_id = ANY($1) AND ${localExclusionClause({ includeSilenced: false })}
+             AND ${viewerExclusionClause({ viewerParamIndex: 3, localAuthorColumn: 's.author_id' })}
            ORDER BY s.created_at DESC LIMIT $2`,
-          [followedUserIds, limit]
+          [followedUserIds, limit, req.authUser.id]
         )
       : { rows: [] };
 
@@ -170,9 +178,10 @@ router.get('/api/v1/timelines/home', requireAuth, async (req, res) => {
       ? await pool.query(
           `SELECT rs.*, ra.username, ra.domain, ra.display_name, ra.actor_uri, ra.fetched_at, ra.id AS actor_id
            FROM remote_statuses rs JOIN remote_actors ra ON ra.id = rs.author_actor_id
-           WHERE rs.author_actor_id = ANY($1)
+           WHERE rs.author_actor_id = ANY($1) AND ${remoteExclusionClause({ includeSilenced: false })}
+             AND ${viewerExclusionClause({ viewerParamIndex: 3, remoteAuthorColumn: 'rs.author_actor_id' })}
            ORDER BY rs.received_at DESC LIMIT $2`,
-          [followedActorIds, limit]
+          [followedActorIds, limit, req.authUser.id]
         )
       : { rows: [] };
 
