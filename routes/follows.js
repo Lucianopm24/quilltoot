@@ -126,8 +126,19 @@ router.post('/api/v1/accounts/:id/unfollow', requireAuth, async (req, res) => {
 
     const remoteTarget = await pool.query('SELECT * FROM remote_actors WHERE id = $1', [id]);
     if (remoteTarget.rows.length > 0) {
-      await pool.query('DELETE FROM follows WHERE follower_user_id = $1 AND followee_actor_id = $2', [req.authUser.id, id]);
-      await queueFederation('undo_follow', { follower: req.authUser, targetActor: remoteTarget.rows[0] });
+      // RETURNING follow_activity_uri: lo necesita el federationHook para
+      // armar un Undo{Follow} que referencie el Follow original que mandamos,
+      // en vez de uno sintético (más correcto para servidores remotos que
+      // validan que el Undo apunte a una actividad que realmente conocen).
+      const deletedFollow = await pool.query(
+        'DELETE FROM follows WHERE follower_user_id = $1 AND followee_actor_id = $2 RETURNING follow_activity_uri',
+        [req.authUser.id, id]
+      );
+      await queueFederation('undo_follow', {
+        follower: req.authUser,
+        targetActor: remoteTarget.rows[0],
+        followActivityUri: deletedFollow.rows[0]?.follow_activity_uri || null,
+      });
 
       const relationship = await buildRelationship(req.authUser.id, true, id);
       return res.json(relationship);
