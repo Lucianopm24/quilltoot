@@ -215,7 +215,17 @@ router.get('/api/v1/timelines/home', requireAuth, async (req, res) => {
  */
 router.get('/api/v1/accounts/verify_credentials', requireAuth, async (req, res) => {
   const instanceDomain = getInstanceDomain();
-  return res.json(serializeLocalAccount(req.authUser, instanceDomain));
+  // Nota: serializeLocalAccount() sigue el formato estándar de Mastodon,
+  // que Elk espera tal cual (sin campos de rol). Este endpoint en
+  // particular es "quién soy yo mismo" — acá sí es seguro y útil sumar
+  // is_admin/is_moderator, para que un frontend propio (como el panel
+  // de administración) pueda decidir qué mostrar sin pegarle a otra ruta.
+  return res.json({
+    ...serializeLocalAccount(req.authUser, instanceDomain),
+    is_admin: !!req.authUser.is_admin,
+    is_moderator: !!req.authUser.is_moderator,
+    silenced_at: req.authUser.silenced_at || null,
+  });
 });
 
 /**

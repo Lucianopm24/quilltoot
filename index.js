@@ -101,6 +101,25 @@ app.use(followsRouter);
 app.use(moderationRouter);
 app.use(reportsRouter);
 
+// --- Panel web (React, buildeado con `npm run build` dentro de /panel) ---
+// Sirve los archivos estáticos generados en /public/panel bajo /panel, y
+// como es una SPA con su propio router (react-router con basename="/panel"),
+// cualquier sub-ruta que no sea un archivo real (ej /panel/moderacion/reportes)
+// tiene que devolver el mismo index.html para que React Router la resuelva
+// del lado del cliente. Va DESPUÉS de todas las rutas de la API y ANTES del
+// 404 en JSON, para no competir con ningún endpoint real.
+const path = require('path');
+const PANEL_DIR = path.join(__dirname, 'public', 'panel');
+app.use('/panel', express.static(PANEL_DIR));
+app.get('/panel/{*splat}', (req, res, next) => {
+  res.sendFile(path.join(PANEL_DIR, 'index.html'), (err) => {
+    // Si el build del panel no existe todavía (por ejemplo, en un fork que
+    // no corrió `npm run build` dentro de /panel), no tumbamos el server:
+    // dejamos que caiga al 404 en JSON de más abajo con un mensaje claro.
+    if (err) next();
+  });
+});
+
 // 404 explícito en JSON (mejor que el HTML default de Express para una API)
 app.use((req, res) => {
   res.status(404).json({ error: `No existe ${req.method} ${req.path}` });

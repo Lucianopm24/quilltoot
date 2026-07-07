@@ -63,7 +63,31 @@ Andá a [elk.zone](https://elk.zone) → **Sign in** → en el campo de instanci
 
 Desde ahí ya podés postear, seguir gente, y (si sos admin/moderador) usar el panel de moderación que expone `routes/moderation.js`.
 
-## Correrlo localmente (opcional, para desarrollo)
+## 5. El panel web (`/panel`)
+
+Además de Elk (para el día a día de publicar y seguir gente), el repo incluye un **panel propio** en React con:
+
+- **Login y registro** (`/panel/login`, `/panel/registro`) — pantallas que no existían antes, para que no dependas de `curl` para crear cuentas.
+- **Mi cuenta** (`/panel/cuenta`) — vista de solo lectura de tu perfil. *Nota: editar nombre, bio o avatar todavía no tiene endpoint en el backend, así que esta pantalla no lo permite todavía.*
+- **La instancia** (`/panel/instancia`) — página pública con nombre, descripción y estadísticas.
+- **Moderación** (`/panel/moderacion/*`, visible solo si sos admin o moderador) — bandeja de reportes, buscador de cuentas para suspender/silenciar, dominios bloqueados, y registro de auditoría.
+- **Administración** (`/panel/admin/*`, visible solo si sos admin) — aprobar/rechazar cuentas pendientes, y editar título/descripción/contacto de la instancia.
+
+El panel se buildea solo: cuando Vercel corre `npm run build` en la raíz, ese script entra a `panel/`, instala sus dependencias, y compila los estáticos directo a `public/panel`, que `index.js` sirve bajo `/panel`. No es un deploy aparte — vive en el mismo dominio que la API, así que no hay que configurar CORS ni nada extra para que funcione.
+
+Para acceder: andá a `https://tu-proyecto.vercel.app/panel/login` (o `/panel/registro` la primera vez).
+
+### Desarrollo local del panel
+
+```bash
+cd panel
+npm install
+npm run dev
+```
+
+Esto levanta el panel en un puerto de desarrollo aparte con hot-reload, haciendo proxy de `/api`, `/auth` y `/oauth` hacia `http://localhost:3000` (asegurate de tener el backend (`npm start` en la raíz) corriendo en paralelo).
+
+## Correrlo localmente (opcional, para desarrollo del backend)
 
 ```bash
 git clone https://github.com/Lucianopm24/Quilltoot.git
@@ -87,6 +111,9 @@ quilltoot/
 │   └── pool.js           # conexión a la base (pg)
 ├── lib/                  # helpers: auth, federación, moderación, firmas HTTP, etc.
 ├── routes/                # endpoints: auth, statuses, timelines, follows, moderación, reportes...
+├── panel/                 # frontend React: login, registro, cuenta, moderación, admin
+│   └── src/
+├── public/panel/           # build compilado del panel (generado, no editar a mano)
 ├── index.js               # server Express (rutas + arranque)
 ├── vercel.json             # config de Vercel (rutea todo a api/index.js)
 └── .env.example

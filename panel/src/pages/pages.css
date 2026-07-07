@@ -1,0 +1,236 @@
+.page__title {
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+.page__sub {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem;
+}
+.page__error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  background: var(--danger-soft);
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+}
+.page__footnote {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 1rem;
+}
+
+.account-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.account-row__name {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.account-row__handle {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.account-row__badges {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+.kv dt {
+  color: var(--text-dim);
+  font-size: 0.83rem;
+}
+.kv dd {
+  margin: 0;
+  font-size: 0.83rem;
+  font-family: var(--font-mono);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: center;
+}
+.stat-card__num {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.stat-card__label {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.25rem;
+}
+.tabs__item {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.tabs__item--active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.report-row {
+  margin-bottom: 0.9rem;
+}
+.report-row__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.5rem;
+}
+.report-row__meta {
+  color: var(--text-dim);
+  font-size: 0.83rem;
+}
+.report-row__comment {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 0.87rem;
+}
+.report-row__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.report-row__resolution {
+  color: var(--text-dim);
+  font-size: 0.83rem;
+}
+
+.mod-account {
+  margin-bottom: 0.9rem;
+}
+.mod-account__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.mod-account__head > div {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.mod-account__domain {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.mod-account__reason {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin: 0.3rem 0;
+}
+.mod-account__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.search-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.domain-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.domain-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.audit-row__action {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+.audit-row__meta {
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  margin-left: 0.6rem;
+}
+.audit-row__reason {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin: 0.35rem 0 0;
+}
+
+.pending-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+.pending-row__display {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.pending-row__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+@media (max-width: 600px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+  .search-bar,
+  .domain-form {
+    flex-direction: column;
+  }
+}
