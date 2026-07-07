@@ -117,7 +117,14 @@ app.use((err, req, res, next) => {
 
 initFederation();
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Quilltoot escuchando en el puerto ${PORT} (INSTANCE_DOMAIN=${process.env.INSTANCE_DOMAIN})`);
-});
+// En Vercel (serverless) este archivo se importa como módulo — api/index.js
+// reexporta `app` y Vercel maneja el "listen" por su cuenta. Solo abrimos
+// un puerto propio cuando corremos localmente con `node index.js` / `npm start`.
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Quilltoot escuchando en el puerto ${PORT} (INSTANCE_DOMAIN=${process.env.INSTANCE_DOMAIN})`);
+  });
+}
+
+module.exports = app;
