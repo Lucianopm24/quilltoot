@@ -148,8 +148,13 @@ router.post('/api/v1/accounts/:id/follow', requireAuth, async (req, res) => {
       );
       // El Follow real por ActivityPub lo manda el módulo de federación;
       // el estado pasará a 'accepted' cuando llegue el Accept correspondiente
-      // al Inbox (módulo 5).
-      await queueFederation('follow', { follower: req.authUser, targetActor: remoteTarget.rows[0] });
+      // al Inbox (módulo 5). Deliberadamente NO se espera (sin await) a que
+      // termine de entregarse: el registro 'pending' ya quedó guardado, así
+      // que Elk puede recibir la respuesta ya mismo. Si esperáramos acá, un
+      // inbox remoto lento (o antes del fix, colgado sin timeout) dejaba el
+      // botón de "Seguir" en Elk cargando indefinidamente.
+      queueFederation('follow', { follower: req.authUser, targetActor: remoteTarget.rows[0] })
+        .catch((err) => console.error('Error federando follow (async):', err));
 
       const relationship = await buildRelationship(req.authUser.id, true, id);
       return res.json(relationship);
