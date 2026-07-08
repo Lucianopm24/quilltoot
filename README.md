@@ -1,8 +1,14 @@
 # Quilltoot
 
+>[!WARNING]
+> Quilltoot todavía esta en Alpha.
+
 Quilltoot es un servidor ActivityPub (compatible con la API de Mastodon) pensado para ser simple: tan simple que no hace falta rentar un servidor ni pagar por hosting. Corre gratis en **Vercel** con **Supabase** como base de datos.
 
 Es compatible con [Elk](https://elk.zone) como cliente — cualquiera puede loguearse ahí apuntando a tu instancia.
+
+>[!NOTE]
+> Si quieres probar Quilltoot antes de usarlo, visita https://quilltoot.indevs.in/panel y usa un cliente como [Elk](https://elk.zone).
 
 ## Qué necesitás
 
