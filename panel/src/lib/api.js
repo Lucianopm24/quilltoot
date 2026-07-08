@@ -131,27 +131,34 @@ async function loginWithPassword(identifier, password) {
     password,
   });
 
+  // OJO: NO usar redirect:'manual' acá. fetch() con redirect:'manual'
+  // devuelve una respuesta "opaque-redirect" — el navegador oculta
+  // status Y headers por espec, así que leer el Location es imposible
+  // aunque sea same-origin (esto rompía el login siempre, 100% de las
+  // veces, no era intermitente). En su lugar, pedimos JSON explícito:
+  // el backend (routes/oauth.js) detecta el header Accept y devuelve
+  // { code } o { error } directo en el body, sin redirigir.
   const authorizeRes = await fetch('/oauth/authorize', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
     body: authorizeBody.toString(),
-    redirect: 'manual',
   });
 
-  // El server responde con un 302: si vuelve a /oauth/authorize?error=...,
-  // las credenciales fallaron o la cuenta está pending/rechazada.
-  const location = authorizeRes.headers.get('Location') || authorizeRes.headers.get('location');
-  if (!location) {
+  let authorizeData;
+  try {
+    authorizeData = await authorizeRes.json();
+  } catch {
     throw new ApiError('No se pudo iniciar sesión: respuesta inesperada del servidor.', authorizeRes.status);
   }
 
-  const locationUrl = new URL(location, window.location.origin);
-  const errorParam = locationUrl.searchParams.get('error');
-  if (errorParam) {
-    throw new ApiError(errorParam, 401);
+  if (!authorizeRes.ok || authorizeData.error) {
+    throw new ApiError(authorizeData.error || 'No se pudo iniciar sesión.', authorizeRes.status);
   }
 
-  const code = locationUrl.searchParams.get('code');
+  const code = authorizeData.code;
   if (!code) {
     throw new ApiError('No se recibió un código de autorización.', 500);
   }

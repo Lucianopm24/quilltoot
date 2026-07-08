@@ -170,6 +170,17 @@ router.post('/oauth/authorize', express.urlencoded({ extended: true }), async (r
     return res.status(400).send('redirect_uri no coincide con ninguno de los registrados para esta app.');
   }
 
+  // El panel (panel/src/lib/api.js) llama a esta misma ruta por fetch()
+  // en vez de dejar que el navegador navegue de verdad, para poder
+  // "esconder" el flujo OAuth de 3 pasos detrás de un solo login. Pero
+  // fetch() con redirect:'manual' devuelve una respuesta "opaque-redirect"
+  // en la que el navegador oculta status y headers POR ESPEC — no hay
+  // forma de leer el Location desde JS, ni siquiera same-origin. Por eso
+  // el panel manda "Accept: application/json" para pedir el resultado
+  // como JSON en vez de como redirect; Elk (que sí navega de verdad)
+  // nunca manda ese header, así que sigue recibiendo el 302 de siempre.
+  const wantsJson = (req.get('Accept') || '').includes('application/json');
+
   const result = await verifyCredentialsDetailed(identifier, password);
   if (!result.ok) {
     const errorMessages = {
@@ -177,13 +188,19 @@ router.post('/oauth/authorize', express.urlencoded({ extended: true }), async (r
       pending_approval: 'Tu cuenta todavía está pendiente de aprobación por un administrador.',
       rejected: 'Tu solicitud de registro fue rechazada en esta instancia.',
     };
+    const errorMessage = errorMessages[result.reason] || errorMessages.invalid_credentials;
+
+    if (wantsJson) {
+      return res.status(401).json({ error: errorMessage, reason: result.reason });
+    }
+
     const qs = new URLSearchParams({
       client_id,
       redirect_uri,
       response_type: 'code',
       scope,
       state: state || '',
-      error: errorMessages[result.reason] || errorMessages.invalid_credentials,
+      error: errorMessage,
     });
     return res.redirect(`/oauth/authorize?${qs.toString()}`);
   }
@@ -195,6 +212,10 @@ router.post('/oauth/authorize', express.urlencoded({ extended: true }), async (r
      VALUES ($1, $2, $3, $4, $5)`,
     [code, app.id, user.id, redirect_uri, scope || 'read write follow']
   );
+
+  if (wantsJson) {
+    return res.status(200).json({ code, state: state || null });
+  }
 
   const redirectUrl = new URL(redirect_uri);
   redirectUrl.searchParams.set('code', code);
