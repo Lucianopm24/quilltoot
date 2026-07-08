@@ -220,11 +220,24 @@ router.get('/api/v1/accounts/verify_credentials', requireAuth, async (req, res) 
   // particular es "quién soy yo mismo" — acá sí es seguro y útil sumar
   // is_admin/is_moderator, para que un frontend propio (como el panel
   // de administración) pueda decidir qué mostrar sin pegarle a otra ruta.
+  //
+  // "source" faltaba acá y es OBLIGATORIO según la doc de Mastodon
+  // (verify_credentials siempre lo incluye) — Elk lo usa para saber la
+  // visibilidad/idioma default ANTES de poder armar el compose, así
+  // que sin este campo el botón de publicar directamente no aparecía.
   return res.json({
     ...serializeLocalAccount(req.authUser, instanceDomain),
     is_admin: !!req.authUser.is_admin,
     is_moderator: !!req.authUser.is_moderator,
     silenced_at: req.authUser.silenced_at || null,
+    source: {
+      note: req.authUser.bio || '',
+      fields: [],
+      privacy: 'public',
+      sensitive: false,
+      language: null,
+      follow_requests_count: 0,
+    },
   });
 });
 
