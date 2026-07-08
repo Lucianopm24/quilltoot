@@ -229,28 +229,6 @@ router.get('/api/v1/accounts/verify_credentials', requireAuth, async (req, res) 
 });
 
 /**
- * GET /api/v1/accounts/:id
- * Puede ser un usuario local o un actor remoto cacheado.
- */
-router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
-  const instanceDomain = getInstanceDomain();
-  try {
-    const localResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
-    if (localResult.rows.length > 0) {
-      return res.json(serializeLocalAccount(localResult.rows[0], instanceDomain));
-    }
-    const remoteResult = await pool.query('SELECT * FROM remote_actors WHERE id = $1', [req.params.id]);
-    if (remoteResult.rows.length > 0) {
-      return res.json(serializeRemoteAccount(remoteResult.rows[0]));
-    }
-    return res.status(404).json({ error: 'Cuenta no encontrada.' });
-  } catch (err) {
-    console.error('Error en GET /api/v1/accounts/:id:', err);
-    return res.status(500).json({ error: 'Error interno.' });
-  }
-});
-
-/**
  * GET /api/v1/accounts/lookup?acct=username o username@dominio
  *
  * Endpoint estándar de Mastodon: resuelve una cuenta por su @handle en
@@ -260,6 +238,15 @@ router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
  * `users`; si es de otra instancia, busca en el cache de `remote_actors`
  * (y devuelve 404 si todavía no la conocemos — no resolvemos vía
  * WebFinger en vivo aquí, eso es trabajo del módulo de federación).
+ *
+ * IMPORTANTE: esta ruta tiene que registrarse ANTES que
+ * "/api/v1/accounts/:id" de abajo. Express matchea rutas en el orden
+ * en que se registran, y ":id" es un comodín que matchea CUALQUIER
+ * string — incluida la palabra literal "lookup". Si quedara después,
+ * todo request a /accounts/lookup caería en :id con id="lookup", y
+ * Postgres tira "invalid input syntax for type uuid" al intentar
+ * comparar esa columna UUID contra el string "lookup" (justo el 500
+ * que viste en los logs).
  */
 router.get('/api/v1/accounts/lookup', attachUserIfPresent, async (req, res) => {
   const instanceDomain = getInstanceDomain();
@@ -290,6 +277,28 @@ router.get('/api/v1/accounts/lookup', attachUserIfPresent, async (req, res) => {
     return res.json(serializeRemoteAccount(result.rows[0]));
   } catch (err) {
     console.error('Error en GET /api/v1/accounts/lookup:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
+ * GET /api/v1/accounts/:id
+ * Puede ser un usuario local o un actor remoto cacheado.
+ */
+router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  try {
+    const localResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    if (localResult.rows.length > 0) {
+      return res.json(serializeLocalAccount(localResult.rows[0], instanceDomain));
+    }
+    const remoteResult = await pool.query('SELECT * FROM remote_actors WHERE id = $1', [req.params.id]);
+    if (remoteResult.rows.length > 0) {
+      return res.json(serializeRemoteAccount(remoteResult.rows[0]));
+    }
+    return res.status(404).json({ error: 'Cuenta no encontrada.' });
+  } catch (err) {
+    console.error('Error en GET /api/v1/accounts/:id:', err);
     return res.status(500).json({ error: 'Error interno.' });
   }
 });
