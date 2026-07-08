@@ -119,7 +119,9 @@ router.post('/api/v1/accounts/:id/follow', requireAuth, async (req, res) => {
       await pool.query(
         `INSERT INTO follows (follower_user_id, followee_user_id, status)
          VALUES ($1, $2, 'accepted')
-         ON CONFLICT (follower_user_id, followee_user_id) DO NOTHING`,
+         ON CONFLICT (follower_user_id, followee_user_id)
+           WHERE follower_user_id IS NOT NULL AND followee_user_id IS NOT NULL
+           DO NOTHING`,
         [req.authUser.id, id]
       );
       await pool.query('UPDATE users SET followers_count = followers_count + 1 WHERE id = $1', [id]);
@@ -143,7 +145,9 @@ router.post('/api/v1/accounts/:id/follow', requireAuth, async (req, res) => {
       await pool.query(
         `INSERT INTO follows (follower_user_id, followee_actor_id, status)
          VALUES ($1, $2, 'pending')
-         ON CONFLICT (follower_user_id, followee_actor_id) DO NOTHING`,
+         ON CONFLICT (follower_user_id, followee_actor_id)
+           WHERE follower_user_id IS NOT NULL AND followee_actor_id IS NOT NULL
+           DO NOTHING`,
         [req.authUser.id, id]
       );
       // El Follow real por ActivityPub lo manda el módulo de federación;
