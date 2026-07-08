@@ -46,6 +46,7 @@ const timelinesRouter = require('./routes/timelines');
 const { router: followsRouter } = require('./routes/follows');
 const moderationRouter = require('./routes/moderation');
 const reportsRouter = require('./routes/reports');
+const searchRouter = require('./routes/search');
 const { initFederation } = require('./lib/federation');
 
 const REQUIRED_ENV_VARS = ['DATABASE_URL', 'INSTANCE_DOMAIN'];
@@ -96,6 +97,7 @@ app.use('/api/v1/admin', adminInstanceRouter);
 app.use(statusesRouter);
 app.use(timelinesRouter);
 app.use(followsRouter);
+app.use(searchRouter);
 
 // --- Moderación (Módulo 7): panel de mods/admins + reportes de usuarios ---
 app.use(moderationRouter);

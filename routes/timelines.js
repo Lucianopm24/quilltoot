@@ -372,4 +372,55 @@ router.get('/api/v1/instance', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/v2/instance
+ * Desde Mastodon 4.0, es la ruta PRIMARIA que Elk consulta para saber
+ * de qué instancia se trata (v1/instance quedó como fallback legado).
+ * Si esta ruta no existe, Elk puede terminar con configuración a medias
+ * (streaming_api, límites de caracteres, reglas...) y comportarse raro
+ * más allá del timeline de inicio. Shape distinto al de v1: no repite
+ * los mismos campos, así que va aparte en vez de reusar el de arriba.
+ */
+router.get('/api/v2/instance', async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  try {
+    const [settings, stats] = await Promise.all([getInstanceSettings(), getInstanceStats()]);
+
+    return res.json({
+      domain: instanceDomain,
+      title: settings.title,
+      version: '4.2.0',
+      source_url: 'https://github.com/Lucianopm24/quilltoot',
+      description: settings.description,
+      usage: {
+        users: { active_month: stats.user_count ?? 0 },
+      },
+      thumbnail: { url: null },
+      icon: [],
+      languages: ['es', 'en'],
+      configuration: {
+        urls: { streaming: null, status: null },
+        vapid: { public_key: null },
+        accounts: { max_featured_tags: 0 },
+        statuses: { max_characters: 500, max_media_attachments: 0, characters_reserved_per_url: 23 },
+        media_attachments: { supported_mime_types: [], image_size_limit: 0, video_size_limit: 0 },
+        polls: { max_options: 0, max_characters_per_option: 0, min_expiration: 0, max_expiration: 0 },
+        translation: { enabled: false },
+      },
+      registrations: {
+        enabled: isOpenRegistration(),
+        approval_required: isApprovalRequired(),
+        message: null,
+        url: null,
+      },
+      contact: { email: settings.contact_email, account: null },
+      rules: [],
+      api_versions: { mastodon: 2 },
+    });
+  } catch (err) {
+    console.error('Error en GET /api/v2/instance:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
 module.exports = router;
