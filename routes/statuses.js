@@ -15,6 +15,8 @@ const crypto = require('crypto');
 const pool = require('../db/pool');
 const { requireAuth, attachUserIfPresent } = require('../lib/authMiddleware');
 const { serializeLocalStatus, serializeRemoteStatus } = require('../lib/serializers');
+const { createNotification } = require('../lib/notifications');
+const { buildNoteObject } = require('../lib/activitypub');
 
 const router = express.Router();
 
@@ -132,11 +134,80 @@ router.post('/api/v1/statuses', requireAuth, async (req, res) => {
     // Encolar el envío a followers remotos (lo hará de verdad el módulo 6).
     await queueFederation('create', { status: newStatus, author: req.authUser });
 
+    // Notificar al autor del post original si esto es una respuesta a un
+    // status LOCAL suyo (a un status remoto no le mandamos notificación:
+    // esa la genera el servidor de origen cuando reciba nuestra Reply).
+    if (inReplyToStatusId) {
+      const parent = await pool.query('SELECT author_id FROM statuses WHERE id = $1', [inReplyToStatusId]);
+      if (parent.rows.length > 0) {
+        await createNotification({
+          recipientUserId: parent.rows[0].author_id,
+          type: 'reply',
+          actorUserId: req.authUser.id,
+          statusId: newStatus.id,
+        });
+      }
+    }
+
     const extras = await getStatusExtras(newStatus.id, false, req.authUser.id);
     return res.status(200).json(serializeLocalStatus(newStatus, req.authUser, instanceDomain, extras));
   } catch (err) {
     console.error('Error en POST /api/v1/statuses:', err);
     return res.status(500).json({ error: 'Error interno al crear el status.' });
+  }
+});
+
+/**
+ * GET /statuses/:id
+ *
+ * Esta es la URI PÚBLICA de ActivityPub que nosotros mismos generamos
+ * como activity_uri al crear cada status (https://tudominio/statuses/id)
+ * y mandamos a los followers remotos en cada Create. Sin esta ruta, esa
+ * URL no resolvía a nada — cualquiera que la abriera (un cliente, otra
+ * instancia verificando el objeto, o Elk siguiendo el campo "url" del
+ * status) se encontraba con el 404 genérico de Express.
+ *
+ * Solo cubre statuses LOCALES: los remotos no tienen una URI nuestra,
+ * viven bajo el dominio de su propia instancia.
+ */
+router.get('/statuses/:id', async (req, res) => {
+  const instanceDomain = getInstanceDomain();
+  try {
+    const result = await pool.query(
+      'SELECT * FROM statuses WHERE id = $1',
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Status no encontrado.' });
+    }
+    const status = result.rows[0];
+
+    if (status.visibility === 'direct' || status.visibility === 'private') {
+      // No exponemos DMs ni posts "solo seguidores" en la URI pública.
+      return res.status(404).json({ error: 'Status no encontrado.' });
+    }
+
+    const author = await pool.query('SELECT * FROM users WHERE id = $1', [status.author_id]);
+    if (author.rows.length === 0) {
+      return res.status(404).json({ error: 'Status no encontrado.' });
+    }
+
+    // Resolver la URI del padre (local o remoto) para inReplyTo.
+    let inReplyToUri = null;
+    if (status.in_reply_to_status_id) {
+      const parent = await pool.query('SELECT activity_uri FROM statuses WHERE id = $1', [status.in_reply_to_status_id]);
+      inReplyToUri = parent.rows[0]?.activity_uri || null;
+    } else if (status.in_reply_to_remote_id) {
+      const parent = await pool.query('SELECT activity_uri FROM remote_statuses WHERE id = $1', [status.in_reply_to_remote_id]);
+      inReplyToUri = parent.rows[0]?.activity_uri || null;
+    }
+
+    const note = buildNoteObject(status, author.rows[0], instanceDomain, { inReplyToUri });
+    res.set('Content-Type', 'application/activity+json');
+    return res.json(note);
+  } catch (err) {
+    console.error('Error en GET /statuses/:id:', err);
+    return res.status(500).json({ error: 'Error interno.' });
   }
 });
 
@@ -253,6 +324,17 @@ router.post('/api/v1/statuses/:id/favourite', requireAuth, async (req, res) => {
     );
     await queueFederation('like', { statusId: req.params.id, isRemote: resolved.isRemote, actor: req.authUser });
 
+    // Solo notificamos si el post es LOCAL (favear un post remoto le
+    // manda un Like federado a esa instancia, que es quien avisa allá).
+    if (!resolved.isRemote) {
+      await createNotification({
+        recipientUserId: resolved.row.author_id,
+        type: 'favourite',
+        actorUserId: req.authUser.id,
+        statusId: req.params.id,
+      });
+    }
+
     return await respondWithStatus(req, res, resolved, req.params.id);
   } catch (err) {
     console.error('Error en favourite:', err);
@@ -295,6 +377,15 @@ router.post('/api/v1/statuses/:id/reblog', requireAuth, async (req, res) => {
       [req.authUser.id, req.params.id, activityUri]
     );
     await queueFederation('announce', { statusId: req.params.id, isRemote: resolved.isRemote, actor: req.authUser, activityUri });
+
+    if (!resolved.isRemote) {
+      await createNotification({
+        recipientUserId: resolved.row.author_id,
+        type: 'reblog',
+        actorUserId: req.authUser.id,
+        statusId: req.params.id,
+      });
+    }
 
     return await respondWithStatus(req, res, resolved, req.params.id);
   } catch (err) {

@@ -511,3 +511,47 @@ CREATE TABLE moderation_log (
 );
 
 CREATE INDEX idx_moderation_log_created ON moderation_log(created_at DESC);
+-- ============================================================
+-- MÓDULO 8 (Notificaciones) — feed de eventos que le pasaron A un
+-- usuario local (lo siguieron, favoritearon/boostearon/mencionaron/
+-- respondieron uno de sus posts). Elk pide GET /api/v1/notifications
+-- para pintar la campanita; sin esta tabla no hay de dónde leerlas.
+--
+-- El actor de la notificación (quién la generó) puede ser un usuario
+-- local o un actor remoto, igual que en follows/favourites/reblogs.
+-- El objeto relacionado (status sobre el que ocurrió) es opcional
+-- (un 'follow' no tiene status asociado).
+-- ============================================================
+CREATE TABLE notifications (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- El dueño de la notificación: SIEMPRE un usuario local (solo
+    -- generamos notificaciones para gente de nuestra instancia).
+    recipient_user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+    type                TEXT NOT NULL
+                            CHECK (type IN ('follow', 'follow_request', 'favourite', 'reblog', 'mention', 'reply')),
+
+    -- Quién generó el evento (exactamente uno de los dos).
+    actor_user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+    actor_actor_id      UUID REFERENCES remote_actors(id) ON DELETE CASCADE,
+
+    -- Status relacionado, si aplica (favourite/reblog/mention/reply).
+    -- Igual que en reports, puede apuntar a `statuses` o a
+    -- `remote_statuses`; no hay FK real posible sobre un id que puede
+    -- ser de cualquiera de las dos tablas.
+    status_id           UUID REFERENCES statuses(id) ON DELETE CASCADE,
+    remote_status_id    UUID REFERENCES remote_statuses(id) ON DELETE CASCADE,
+
+    read_at             TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CHECK (
+        (actor_user_id IS NOT NULL)::int + (actor_actor_id IS NOT NULL)::int = 1
+    ),
+    CHECK (
+        (status_id IS NOT NULL)::int + (remote_status_id IS NOT NULL)::int <= 1
+    )
+);
+
+CREATE INDEX idx_notifications_recipient ON notifications(recipient_user_id, created_at DESC);

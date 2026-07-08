@@ -47,6 +47,8 @@ const { router: followsRouter } = require('./routes/follows');
 const moderationRouter = require('./routes/moderation');
 const reportsRouter = require('./routes/reports');
 const searchRouter = require('./routes/search');
+const notificationsRouter = require('./routes/notifications');
+const conversationsRouter = require('./routes/conversations');
 const { initFederation } = require('./lib/federation');
 
 const REQUIRED_ENV_VARS = ['DATABASE_URL', 'INSTANCE_DOMAIN'];
@@ -98,6 +100,8 @@ app.use(statusesRouter);
 app.use(timelinesRouter);
 app.use(followsRouter);
 app.use(searchRouter);
+app.use(notificationsRouter);
+app.use(conversationsRouter);
 
 // --- Moderación (Módulo 7): panel de mods/admins + reportes de usuarios ---
 app.use(moderationRouter);

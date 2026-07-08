@@ -16,6 +16,7 @@ const pool = require('../db/pool');
 const { requireAuth, attachUserIfPresent } = require('../lib/authMiddleware');
 const { serializeLocalAccount, serializeRemoteAccount } = require('../lib/serializers');
 const { isBlockedEitherWay } = require('../lib/moderation');
+const { createNotification } = require('../lib/notifications');
 
 const router = express.Router();
 
@@ -67,6 +68,40 @@ async function buildRelationship(followerUserId, targetIsRemote, targetId) {
 }
 
 /**
+ * GET /api/v1/accounts/relationships?id[]=uuid1&id[]=uuid2...
+ *
+ * Elk la llama constantemente (timeline, perfiles, resultados de
+ * búsqueda) para saber si ya seguís/bloqueaste/muteaste a cada cuenta
+ * que te muestra. No existía, por eso el 500/404 que reportaste.
+ *
+ * Express parsea "id[]=a&id[]=b" como req.query.id = ['a','b'], pero
+ * también aceptamos "id=a" suelto (un solo id, sin corchetes).
+ */
+router.get('/api/v1/accounts/relationships', requireAuth, async (req, res) => {
+  let ids = req.query.id ?? req.query['id[]'];
+  if (!ids) return res.json([]);
+  if (!Array.isArray(ids)) ids = [ids];
+
+  try {
+    const relationships = await Promise.all(
+      ids.map(async (targetId) => {
+        const localTarget = await pool.query('SELECT id FROM users WHERE id = $1', [targetId]);
+        const isRemote = localTarget.rows.length === 0;
+        if (isRemote) {
+          const remoteTarget = await pool.query('SELECT id FROM remote_actors WHERE id = $1', [targetId]);
+          if (remoteTarget.rows.length === 0) return null; // id inexistente: se omite, no rompe el batch
+        }
+        return buildRelationship(req.authUser.id, isRemote, targetId);
+      })
+    );
+    return res.json(relationships.filter(Boolean));
+  } catch (err) {
+    console.error('Error en GET /api/v1/accounts/relationships:', err);
+    return res.status(500).json({ error: 'Error interno.' });
+  }
+});
+
+/**
  * POST /api/v1/accounts/:id/follow
  */
 router.post('/api/v1/accounts/:id/follow', requireAuth, async (req, res) => {
@@ -89,6 +124,12 @@ router.post('/api/v1/accounts/:id/follow', requireAuth, async (req, res) => {
       );
       await pool.query('UPDATE users SET followers_count = followers_count + 1 WHERE id = $1', [id]);
       await pool.query('UPDATE users SET following_count = following_count + 1 WHERE id = $1', [req.authUser.id]);
+
+      await createNotification({
+        recipientUserId: id,
+        type: 'follow',
+        actorUserId: req.authUser.id,
+      });
 
       const relationship = await buildRelationship(req.authUser.id, false, id);
       return res.json(relationship);
