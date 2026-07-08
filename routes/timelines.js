@@ -24,6 +24,18 @@ const { localExclusionClause, remoteExclusionClause, viewerExclusionClause } = r
 
 const router = express.Router();
 
+// UUID v4-ish check simple: alcanza para descartar rutas de texto libre
+// ("relationships", "lookup", etc.) que Express le pasa a :id cuando esta
+// ruta se registra antes que una más específica en index.js. Sin esto,
+// pool.query revienta con "invalid input syntax for type uuid" (500 feo)
+// en vez de un 404 prolijo — y peor, puede robarle el match a una ruta
+// como GET /api/v1/accounts/relationships si el orden de app.use() llega
+// a cambiar de nuevo en el futuro.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUuid(value) {
+  return typeof value === 'string' && UUID_RE.test(value);
+}
+
 function getInstanceDomain() {
   if (!process.env.INSTANCE_DOMAIN) {
     throw new Error('Falta la variable de entorno INSTANCE_DOMAIN.');
@@ -300,6 +312,9 @@ router.get('/api/v1/accounts/lookup', attachUserIfPresent, async (req, res) => {
  */
 router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
   const instanceDomain = getInstanceDomain();
+  if (!isValidUuid(req.params.id)) {
+    return res.status(404).json({ error: 'Cuenta no encontrada.' });
+  }
   try {
     const localResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     if (localResult.rows.length > 0) {
@@ -322,6 +337,9 @@ router.get('/api/v1/accounts/:id', attachUserIfPresent, async (req, res) => {
 router.get('/api/v1/accounts/:id/statuses', attachUserIfPresent, async (req, res) => {
   const instanceDomain = getInstanceDomain();
   const limit = parseLimit(req.query);
+  if (!isValidUuid(req.params.id)) {
+    return res.status(404).json({ error: 'Cuenta no encontrada.' });
+  }
 
   try {
     const localUser = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);

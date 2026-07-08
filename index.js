@@ -96,9 +96,9 @@ app.use(oauthRouter);
 app.use('/api/v1/admin', adminInstanceRouter);
 
 // --- API estilo Mastodon que Elk consume día a día ---
+app.use(followsRouter);
 app.use(statusesRouter);
 app.use(timelinesRouter);
-app.use(followsRouter);
 app.use(searchRouter);
 app.use(notificationsRouter);
 app.use(conversationsRouter);
